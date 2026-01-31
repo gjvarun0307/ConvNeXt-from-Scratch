@@ -12,3 +12,6 @@ Steps followed:
     - **Large Kernel Sizes**, this is from swin-T architecture. Moving the depthwise convolution layer and then increasing the kernel size to 7x7.
     - **Micro Designs**, these include changing ResNet internal compenents to moderen standards. Like changing ReLU to GeLU, fewer activation functions, Fewer normalitation layers, using LN instaed of BN and downsampling layers.
 4. Following above changes to ResNet is dubbed as ConvNexT as quoted in paper.
+
+References:
+1. ConvNeXt - paper

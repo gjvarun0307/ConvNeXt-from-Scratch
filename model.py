@@ -1,19 +1,46 @@
 import torch
 import torch.nn as nn
 import math
+from torchvision.ops import StochasticDepth
+
+# Changes (Micro Changes) - changed ReLU to GELU and BatchNorm to LayerNorm to whole code below
+class ConvnextLayerNorm(nn.Module):
+    def __init__(self, normalized_shape, eps=1e-6):
+        super().__init__()
+
+        self.norm = nn.LayerNorm(normalized_shape, eps)
+
+    def forward(self, x):
+        x = torch.permute(x, (0,2,3,1))  # (N, C, H, W) -> (N, H, W, C)
+        x = self.norm(x)
+        x = torch.permute(x, (0,3,1,2))  # (N, H, W, C) -> (N, C, H, W)
+        return x
+    
+# Changes (Micro Chnages) - add saperate downsampling blocks
+class ConvNextDownsamplingBlock(nn.Module):
+    def __init__(self, in_channels, out_channels):
+        super().__init__()
+        self.downsampling = nn.Sequential(
+            ConvnextLayerNorm(in_channels),
+            nn.Conv2d(in_channels, out_channels, kernel_size=2, stride=2)
+        )
+    
+    def forward(self, x):
+        x = self.downsampling(x)
+        return x
+
 
 # We are starting with ResNet 50 model then make changes to it as explained in paper for ConvNexT
 # Changed some class names for ConvNext
+# Changes (Macro Design - "Patchify" stem block): Change the kernel and stride to 4
 # stem block
 class StemBlock(nn.Module):
-    def __init__(self, in_channels=3, out_channels=64):
+    def __init__(self, in_channels=3, out_channels=96):
         super().__init__()
         
         self.stem = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=7, stride=2, padding=3, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+            nn.Conv2d(in_channels, out_channels, kernel_size=4, stride=4),
+            ConvnextLayerNorm(out_channels),
         )
 
     def forward(self, x):
@@ -22,59 +49,43 @@ class StemBlock(nn.Module):
         
 
 # Bottleneck block
+# Changes (ResNext-ify): Changed the spatial convolution from standard to depthwise convolution
+# Changes (Inverted Bottleneck): moved the spatial convolution to top adn invert dimensions; from wise -> narrow -> wide to narrow -> wide -> narrow
+# Chnages (Using Large Kernal sizes): 
 class BottleneckBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, downsampling=1, expansion=4):
+    def __init__(self, channels, expansion=4, drop_path=0.):
         super().__init__()
-        self.expanded_channels = out_channels*expansion
-        self.need_shortcut = in_channels != self.expanded_channels
+        self.expanded_channels = channels*expansion
+        self.gamma = nn.Parameter(1e-6 * torch.ones(channels), requires_grad=True)
 
         self.block = nn.Sequential(
-            nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1, stride=downsampling, bias=False),
-            nn.BatchNorm2d(out_channels),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_channels, self.expanded_channels, kernel_size=1, stride=1, bias=False),
-            nn.BatchNorm2d(self.expanded_channels)
+            nn.Conv2d(channels, channels, kernel_size=7, padding=3, stride=1, groups=channels),
+            ConvnextLayerNorm(channels),
+            nn.Conv2d(channels, self.expanded_channels, kernel_size=1, stride=1),
+            nn.GELU(),
+            nn.Conv2d(self.expanded_channels, channels, kernel_size=1, stride=1),
         )
         
-        self.shortcut = nn.Sequential(
-            nn.Conv2d(in_channels, self.expanded_channels, kernel_size=1, stride=downsampling, bias=False),
-            nn.BatchNorm2d(self.expanded_channels)
-        ) if self.need_shortcut else nn.Identity()
+        self.drop_path = StochasticDepth(drop_path, mode="batch")
 
     def forward(self, x):
         residual = x
-        if self.need_shortcut: residual = self.shortcut(x)
         x = self.block(x)
-        x += residual
-        x = nn.ReLU(x)
+        x = self.gamma.view(1, -1, 1, 1) * x
+        x = residual + self.drop_path(x)
         return x
-
-# bottle = BottleneckBlock(32, 64)
-# bottle(torch.ones((1, 32, 10, 10))).shape
-# print(bottle)
 
 # ConvNext Stage
 class ConvNextStage(nn.Module):
-    def __init__(self, in_channels, out_channels, n=1, expansion=4):
+    def __init__(self, channels, drop_path, n=1):
         super().__init__()
-        downsampling = 2 if (in_channels != out_channels) else 1
         self.stage = nn.Sequential(
-            BottleneckBlock(in_channels, out_channels, downsampling, expansion),
-            *[BottleneckBlock(out_channels*expansion, out_channels, downsampling=1) for _ in range(n-1)]
+            *[BottleneckBlock(channels, drop_path=drop_path[i]) for i in range(n)]
         )
 
     def forward(self, x):
         x = self.stage(x)
         return x
-
-# dummy = torch.ones((1, 32, 48, 48))
-
-# bottle = ConvNextStage(64, 128, n=3)
-# # bottle(dummy)
-# print(bottle)
 
 # Classification Head
 class ConvNextClassificationHead(nn.Module):
@@ -84,6 +95,7 @@ class ConvNextClassificationHead(nn.Module):
         self.head = nn.Sequential(
             nn.AdaptiveAvgPool2d((1,1)),
             nn.Flatten(),
+            nn.LayerNorm(in_features),
             nn.Linear(in_features, num_classes)
         )
     
@@ -92,22 +104,35 @@ class ConvNextClassificationHead(nn.Module):
         return x
 
 # ConvNext Model 
+# Changes (Macro Design - Stage Ratio Changes): from [3, 4, 6, 3] to [3, 3, 9, 3]
+# Changes (ResNext-ify): Change the block sizes to support increase in width sizes
+# Changes (Micro Changes): Adding the saparate downsample blocks
 class ConvNext(nn.Module):
-    def __init__(self, in_channels, num_classes, expansion=4, block_sizes=[64, 128, 256, 512], depths=[3, 4, 6, 3]):
+    def __init__(self, in_channels, num_classes, block_sizes=[96, 192, 384, 768], depths=[3, 3, 9, 3], drop_path_rate=0.):
         super().__init__()
 
         self.in_out = list(zip(block_sizes, block_sizes[1:]))
+        dp_rates = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
+        cur = depths[0]
 
         self.stem = StemBlock(in_channels, block_sizes[0])
-        self.mainblock = nn.Sequential(
-            ConvNextStage(block_sizes[0], block_sizes[0], depths[0]),
-            *[ConvNextStage(in_channel*expansion, out_channel, depth) for ((in_channel, out_channel), depth) in zip(self.in_out, depths[1:])]
-        )
-        self.head = ConvNextClassificationHead(block_sizes[-1]*expansion, num_classes)
+        self.mainblock = nn.Sequential(ConvNextStage(block_sizes[0], dp_rates[0:depths[0]], depths[0]))
+        for i in range(3):
+            self.mainblock.append(ConvNextDownsamplingBlock(block_sizes[i], block_sizes[i+1]))
+            self.mainblock.append(ConvNextStage(block_sizes[i+1], dp_rates[cur:cur+depths[i+1]], depths[i+1]))
+            cur += depths[i+1]
+        
+        self.head = ConvNextClassificationHead(block_sizes[-1], num_classes)
     
     def forward(self, x):
         x = self.stem(x)
         x = self.mainblock(x)
         x = self.head(x)
         return x
-    
+
+model = ConvNext(3, 1000)
+print(model)
+print(sum(p.numel() for p in model.parameters()))
+
+# from torchvision.models import convnext_tiny
+# print(sum(p.numel() for p in convnext_tiny().parameters()))

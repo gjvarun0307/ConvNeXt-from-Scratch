@@ -145,7 +145,7 @@ def train_model(config):
                 "scaler_state_dict": scaler.state_dict(),
                 "global_step": global_step,
                 "best_acc":best_accuracy
-            }, str(Path(config['model_folder'])/"best_model"))
+            }, str(Path(config['model_folder'])/"convnextmodel_best_model"))
 
         torch.save({
                 'epoch': epoch,
@@ -155,7 +155,7 @@ def train_model(config):
                 "scaler_state_dict": scaler.state_dict(),
                 "global_step": global_step,
                 "best_acc":best_accuracy
-            }, str(Path(config['model_folder'])/"last_model"))
+            }, str(Path(config['model_folder'])/"convnextmodel_last_model"))
 
 if __name__ == "__main__":
     config = get_config()

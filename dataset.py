@@ -6,6 +6,8 @@ from torchvision.datasets import Food101
 
 from pathlib import Path
 
+import os
+
 from config import get_config
 
 # The paper mentioned some specific training steps to follow to avoid overfitting
@@ -17,7 +19,7 @@ train_preproc = v2.Compose([
     v2.RandomHorizontalFlip(),
     v2.RandAugment(),    # paper mentioned magnitude of 9, default values checks out the same
     v2.ToImage(),
-    v2.ToDtype(dtype=torch.float32),
+    v2.ToDtype(dtype=torch.float32, scale=True),
     v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),    # ImageNet standard
     v2.RandomErasing(),
 ])
@@ -28,7 +30,7 @@ test_preproc = v2.Compose([
     v2.Resize(256),
     v2.CenterCrop(224),     # Resizing then centercrop to preserve aspect ratio
     v2.ToImage(),
-    v2.ToDtype(dtype=torch.float32),
+    v2.ToDtype(dtype=torch.float32, scale=True),
     v2.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
@@ -38,8 +40,10 @@ def load_dataloader(config):
     train_data = Food101(root=config["dataset_folder"], split="train", transform=train_preproc, download=True)
     test_data = Food101(root=config["dataset_folder"], split="test", transform=test_preproc, download=True)
 
-    train_dataloader = DataLoader(train_data, batch_size=config["batch_size"], shuffle=True,)
-    test_dataloader = DataLoader(test_data, batch_size=int(config["batch_size"]*1.5))
+    workers = min(os.cpu_count(), 8) if os.cpu_count() else 2
+
+    train_dataloader = DataLoader(train_data, batch_size=config["batch_size"], shuffle=True, num_workers=workers, pin_memory=True)
+    test_dataloader = DataLoader(test_data, batch_size=int(config["batch_size"]*1.5), num_workers=workers, pin_memory=True)
     return train_dataloader, test_dataloader, cutmix_or_mixup
 
 if __name__ == "__main__":

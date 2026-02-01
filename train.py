@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+from torch.utils.tensorboard import SummaryWriter
 
 from config import get_config, get_weights_file_path
 from dataset import load_dataloader
@@ -54,6 +55,9 @@ def train_model(config):
 
     model = get_model(config).to(device)
 
+    # Tensorboard
+    writer = SummaryWriter(config["experiment_name"])
+
     # optimizer and lr scheduling (Linear for first 20 then cosine annealing for rest)
     optimizer = torch.optim.AdamW(model.parameters(), lr=config["lr"], weight_decay=0.05)
     linear_scheduler = LinearLR(optimizer, start_factor=1e-3, end_factor=1 ,total_iters=20)
@@ -67,6 +71,7 @@ def train_model(config):
     scaler = torch.amp.GradScaler(device=device_str)
     initial_epoch = 0
     global_step = 0
+    best_accuracy = 0.0
 
     # preload model if training is interrupted or continue from checkpoints
     if config["preload"]:
@@ -79,11 +84,10 @@ def train_model(config):
         scheduler.load_state_dict(state["scheduler_state_dict"])
         scaler.load_state_dict(state["scaler_state_dict"])
         global_step = state['global_step']
+        best_accuracy = state["best_acc"]
 
     # loss fn
     loss_fn = nn.CrossEntropyLoss().to(device)
-
-    best_accuracy = 0.0
 
     for epoch in range(initial_epoch, config['num_epochs']):
         model.train()
@@ -97,6 +101,10 @@ def train_model(config):
                 loss = loss_fn(output, labels)
             batch_iterator.set_postfix({f'loss': f"{loss.item():6.3f}"})
 
+            # Tensorboard loss
+            writer.add_scalar('train_loss', loss.item(), global_step)
+            writer.add_scalar('Learning_Rate', optimizer.param_groups[0]['lr'], global_step)
+
             # Update the weights
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -108,6 +116,8 @@ def train_model(config):
             global_step += 1
 
         current_acc = get_validation(model, test_dataloader, device)
+        # Tensorboard accuracy
+        writer.add_scalar('validation_acc', current_acc, global_step)
 
         # Step the lr scheduler
         scheduler.step()

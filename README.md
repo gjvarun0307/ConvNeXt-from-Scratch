@@ -1,6 +1,6 @@
 Project in progress...
 
-Steps followed:
+Steps followed for coding the model:
 1. As in paper started to code ResNet50 from scratch.
 2. In ResNet paper, the ResNet 50 uses bottleneck block instead of basic block, stem block as the entey preprocessing, also implement shortcut when the channel size differs due to increse in channel size and then finally the classification head.
 3. The ConvNexT model has following difference from the ResNet:
@@ -12,6 +12,7 @@ Steps followed:
     - **Large Kernel Sizes**, this is from swin-T architecture. Moving the depthwise convolution layer and then increasing the kernel size to 7x7.
     - **Micro Designs**, these include changing ResNet internal compenents to moderen standards. Like changing ReLU to GeLU, fewer activation functions, Fewer normalitation layers, using LN instaed of BN and downsampling layers.
 4. Following above changes to ResNet is dubbed as ConvNexT as quoted in paper.
+5. We use the model for training.
 
 References:
 1. ConvNeXt - paper

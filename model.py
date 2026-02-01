@@ -130,6 +130,10 @@ class ConvNext(nn.Module):
         x = self.head(x)
         return x
 
+def get_model(config):
+    model = ConvNext(in_channels=config["in_channels"], num_classes=config["num_classes"], block_sizes=config["block_sizes"], depths=config["depths"], drop_path_rate=config["drop_path_rate"])
+    return model
+
 model = ConvNext(3, 1000)
 print(model)
 print(sum(p.numel() for p in model.parameters()))
